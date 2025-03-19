@@ -6,6 +6,7 @@ CDN_URL="http://cdn.origin.steamstatic.com/steamlink/rpi/bookworm/arm64/public_b
 CDN_TXT=$(curl -s "$CDN_URL")
 PACKAGE_URL=$(echo "$CDN_TXT" | grep -oP '(?<=https://)[^\s]*')
 PACKAGE_VERSION=$(echo "$PACKAGE_URL" | grep -oP 'steamlink-rpi-bookworm-arm64-([0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?)' | cut -d'-' -f4)
+TAR="$GAMEDIR/bin/bsdtar --no-same-owner --no-same-permission"
 
 # Redirect output and error to the log file
 rm -rf $LOGFILE
@@ -53,37 +54,47 @@ download_steamlink() {
     
     echo "Searching for 'shell' binary in the archive..."
     sleep 2
-    SHELL_PATH=$(tar -tzf steamlink-package.tar.gz | grep -i '/shell$')
+    SHELL_PATH=$($TAR -tf steamlink-package.tar.gz | grep -i '/shell$')
 
     if [[ -n "$SHELL_PATH" ]]; then
         echo "Extracting $SHELL_PATH from steamlink-package.tar.gz..."
-        tar -xzf steamlink-package.tar.gz "$SHELL_PATH" -O > "$GAMEDIR/bin/shell.${DEVICE_ARCH}"
+        $TAR -xf steamlink-package.tar.gz -O "$SHELL_PATH" > "$GAMEDIR/bin/shell.${DEVICE_ARCH}"
         chmod +x "$GAMEDIR/bin/shell.${DEVICE_ARCH}"
         extracted_files+=("$GAMEDIR/bin/shell.${DEVICE_ARCH}")
         
         echo "Searching for 'lib' folder in the archive..."
         sleep 2
-        LIB_PATH=$(tar -tzf steamlink-package.tar.gz | grep -m1 -oE '^[^/]+/lib/')
+        LIB_PATH=$($TAR -tf steamlink-package.tar.gz | grep -m1 -oE '^[^/]+/lib/')
 
         if [[ -n "$LIB_PATH" ]]; then
             echo "Extracting needed libraries from package."
             mkdir -p "$GAMEDIR/libs.${DEVICE_ARCH}"
-            LIB_FILES=$(tar -tzf steamlink-package.tar.gz | grep "^${LIB_PATH}")
+            LIB_FILES=$($TAR -tf steamlink-package.tar.gz | grep "^${LIB_PATH}")
 
             # Extract and track individual files inside the lib folder
             for lib_file in $LIB_FILES; do
-                tar -xzf steamlink-package.tar.gz -C "$GAMEDIR/libs.${DEVICE_ARCH}" --strip-components=2 "$lib_file"
+                $TAR -xf steamlink-package.tar.gz -C "$GAMEDIR/libs.${DEVICE_ARCH}" --strip-components=2 "$lib_file"
                 extracted_files+=("$GAMEDIR/libs.${DEVICE_ARCH}/$(basename "$lib_file")")
             done
             
             echo "Searching for 'Qt-x.xx.x' folder in the archive..."
             sleep 2
-            QT_PATH=$(tar -tzf steamlink-package.tar.gz | grep -oE '^[^/]+/Qt-[0-9]+\.[0-9]+\.[0-9]+/' | head -n1)
+            QT_PATH=$($TAR -tf steamlink-package.tar.gz | grep -oE '^[^/]+/Qt-[0-9]+\.[0-9]+\.[0-9]+/' | head -n1)
 
             if [[ -n "$QT_PATH" ]]; then
                 echo "Extracting $QT_PATH folder..."
-                tar -xzf steamlink-package.tar.gz -C "$GAMEDIR/" --strip-components=1 $(tar -tzf steamlink-package.tar.gz | grep "^${QT_PATH}")
+                $TAR -xf steamlink-package.tar.gz -C "$GAMEDIR/" --strip-components=1 $($TAR -tf steamlink-package.tar.gz | grep "^${QT_PATH}")
                 extracted_files+=("$GAMEDIR/$QT_PATH")
+                
+                # Trim version numbers from library names
+                find "$GAMEDIR/$QT_NEW" -type f | while read -r file; do
+                    new_name=$(echo "$file" | sed -E 's/(.*\.so\.[0-9]+)(\.[0-9]+){1,2}$/\1/')
+                    if [[ "$file" != "$new_name" ]]; then
+                        echo "Renaming $file to $new_name"
+                        mv "$file" "$new_name"
+                    fi
+                done
+    
                 rm -rf steamlink-package.tar.gz
                 echo "Patching process complete!"
             else
